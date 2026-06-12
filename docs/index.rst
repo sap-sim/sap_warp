@@ -59,4 +59,4 @@ SAP Warp Documentation
    :hidden:
    :caption: Project Links
 
-   GitHub <https://github.com/htc-dev/sap_warp>
+   GitHub <https://github.com/sap-sim/sap_warp>

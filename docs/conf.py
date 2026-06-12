@@ -36,8 +36,8 @@ extensions = [
 ]
 
 extlinks = {
-    "issue": ("https://github.com/htc-dev/sap_warp/issues/%s", "issue #%s"),
-    "pr": ("https://github.com/htc-dev/sap_warp/pull/%s", "PR #%s"),
+    "issue": ("https://github.com/sap-sim/sap_warp/issues/%s", "issue #%s"),
+    "pr": ("https://github.com/sap-sim/sap_warp/pull/%s", "PR #%s"),
 }
 
 templates_path = ["_templates"]
@@ -83,7 +83,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/htc-dev/sap_warp",
+            "url": "https://github.com/sap-sim/sap_warp",
             "icon": "fa-brands fa-github",
             "type": "fontawesome",
         },
