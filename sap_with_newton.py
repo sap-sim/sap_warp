@@ -168,7 +168,8 @@ class NewtonCartpoleDemo:
         self.state_0 = self.model.state()
         self.state_1 = self.model.state()
         self.control = self.model.control()
-        self.contacts = self.model.contacts() if self.collision == "newton" else None
+        self.collision_pipeline = newton.CollisionPipeline(self.model) if self.collision == "newton" else None
+        self.contacts = self.collision_pipeline.contacts() if self.collision_pipeline is not None else None
 
         newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state_0)
         self.state_1.assign(self.state_0)
@@ -206,7 +207,7 @@ class NewtonCartpoleDemo:
             self.viewer.apply_forces(self.state_0)
 
             if self.contacts is not None:
-                self.model.collide(self.state_0, self.contacts)
+                self.collision_pipeline.collide(self.state_0, self.contacts)
 
             if self.solver_name == "sap":
                 self.solver.step(self.sap_state_0, self.sap_state_1, self.sap_control, self.contacts, self.sim_dt)

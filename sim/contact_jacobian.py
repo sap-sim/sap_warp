@@ -48,6 +48,38 @@ from sim.sap_runtime import (
 wp.config.enable_backward = False
 
 
+@wp.func
+def _newton_contact_material_override(
+    tid: int,
+    base_mu: wp.float64,
+    base_k: wp.float64,
+    base_tau: wp.float64,
+    rigid_contact_stiffness: wp.array(dtype=wp.float32),
+    rigid_contact_damping: wp.array(dtype=wp.float32),
+    rigid_contact_friction: wp.array(dtype=wp.float32),
+):
+    """Map Newton's optional per-contact hydroelastic material into kSAP data.
+
+    A positive per-contact stiffness is the version-pinned discriminator used
+    by Newton 1.5 hydroelastic contacts.  Its damping is converted from a
+    Kelvin-Voigt coefficient to SAP's time scale using tau=d/k, and its
+    friction entry scales (rather than replaces) the shape-pair coefficient.
+    """
+    mu = base_mu
+    stiffness = base_k
+    tau = base_tau
+    contact_stiffness = wp.float64(rigid_contact_stiffness[tid])
+    if contact_stiffness > wp.float64(0.0):
+        stiffness = contact_stiffness
+        contact_damping = wp.float64(rigid_contact_damping[tid])
+        if contact_damping > wp.float64(0.0):
+            tau = contact_damping / contact_stiffness
+        friction_scale = wp.float64(rigid_contact_friction[tid])
+        if friction_scale > wp.float64(0.0):
+            mu = mu * friction_scale
+    return wp.vec3d(mu, stiffness, tau)
+
+
 @dataclass(frozen=True)
 class SapContactJacobianResult:
     """Views into buffers owned by `SapContactJacobian`."""
@@ -439,6 +471,9 @@ def _scatter_sap_contacts_to_env_direct(
     fallback_k: float,
     shape_material_tau: wp.array(dtype=wp.float64),
     fallback_tau: float,
+    rigid_contact_stiffness: wp.array(dtype=wp.float32),
+    rigid_contact_damping: wp.array(dtype=wp.float32),
+    rigid_contact_friction: wp.array(dtype=wp.float32),
 ):
     tid = wp.tid()
     if tid >= active_count:
@@ -492,7 +527,8 @@ def _scatter_sap_contacts_to_env_direct(
     denom = k0 + k1
     w0 = wp.float64(0.5)
     w1 = wp.float64(0.5)
-    if denom != wp.float64(0.0):
+    is_hydro = rigid_contact_stiffness[tid] > wp.float32(0.0)
+    if denom != wp.float64(0.0) and not is_hydro:
         w0 = k0 / denom
         w1 = k1 / denom
     pC = w0 * x0 + w1 * x1
@@ -507,9 +543,18 @@ def _scatter_sap_contacts_to_env_direct(
         - wp.float64(rigid_contact_margin0[tid])
         - wp.float64(rigid_contact_margin1[tid])
     )
-    env_contact_mu[env, slot] = _contact_mu_pair(shape_material_mu, sh0, sh1, fallback_mu)
-    env_contact_k[env, slot] = _sap_combine_stiffness(k0, k1)
-    env_contact_tau[env, slot] = _contact_tau_pair(shape_material_tau, sh0, sh1, fallback_tau)
+    material = _newton_contact_material_override(
+        tid,
+        _contact_mu_pair(shape_material_mu, sh0, sh1, fallback_mu),
+        _sap_combine_stiffness(k0, k1),
+        _contact_tau_pair(shape_material_tau, sh0, sh1, fallback_tau),
+        rigid_contact_stiffness,
+        rigid_contact_damping,
+        rigid_contact_friction,
+    )
+    env_contact_mu[env, slot] = material[0]
+    env_contact_k[env, slot] = material[1]
+    env_contact_tau[env, slot] = material[2]
 
     # R_WC is stored with world rows and contact-frame columns.
     env_contact_R_WC[env, slot, 0, 0] = cx.x
@@ -605,6 +650,9 @@ def _scatter_sap_contacts_to_env_direct_f32_pose(
     fallback_k: float,
     shape_material_tau: wp.array(dtype=wp.float64),
     fallback_tau: float,
+    rigid_contact_stiffness: wp.array(dtype=wp.float32),
+    rigid_contact_damping: wp.array(dtype=wp.float32),
+    rigid_contact_friction: wp.array(dtype=wp.float32),
 ):
     tid = wp.tid()
     if tid >= active_count:
@@ -660,7 +708,8 @@ def _scatter_sap_contacts_to_env_direct_f32_pose(
     denom = k0f + k1f
     w0 = wp.float32(0.5)
     w1 = wp.float32(0.5)
-    if denom != wp.float32(0.0):
+    is_hydro = rigid_contact_stiffness[tid] > wp.float32(0.0)
+    if denom != wp.float32(0.0) and not is_hydro:
         w0 = k0f / denom
         w1 = k1f / denom
     pC = w0 * x0 + w1 * x1
@@ -675,9 +724,18 @@ def _scatter_sap_contacts_to_env_direct_f32_pose(
         - wp.float64(rigid_contact_margin0[tid])
         - wp.float64(rigid_contact_margin1[tid])
     )
-    env_contact_mu[env, slot] = _contact_mu_pair(shape_material_mu, sh0, sh1, fallback_mu)
-    env_contact_k[env, slot] = _sap_combine_stiffness(k0, k1)
-    env_contact_tau[env, slot] = _contact_tau_pair(shape_material_tau, sh0, sh1, fallback_tau)
+    material = _newton_contact_material_override(
+        tid,
+        _contact_mu_pair(shape_material_mu, sh0, sh1, fallback_mu),
+        _sap_combine_stiffness(k0, k1),
+        _contact_tau_pair(shape_material_tau, sh0, sh1, fallback_tau),
+        rigid_contact_stiffness,
+        rigid_contact_damping,
+        rigid_contact_friction,
+    )
+    env_contact_mu[env, slot] = material[0]
+    env_contact_k[env, slot] = material[1]
+    env_contact_tau[env, slot] = material[2]
 
     env_contact_R_WC[env, slot, 0, 0] = wp.float64(cx.x)
     env_contact_R_WC[env, slot, 1, 0] = wp.float64(cx.y)
@@ -784,6 +842,9 @@ def _scatter_sap_contacts_to_env_direct_f64(
     fallback_k: float,
     shape_material_tau: wp.array(dtype=wp.float64),
     fallback_tau: float,
+    rigid_contact_stiffness: wp.array(dtype=wp.float32),
+    rigid_contact_damping: wp.array(dtype=wp.float32),
+    rigid_contact_friction: wp.array(dtype=wp.float32),
 ):
     tid = wp.tid()
     if tid >= active_count:
@@ -832,7 +893,8 @@ def _scatter_sap_contacts_to_env_direct_f64(
     denom = k0 + k1
     w0 = wp.float64(0.5)
     w1 = wp.float64(0.5)
-    if denom != wp.float64(0.0):
+    is_hydro = rigid_contact_stiffness[tid] > wp.float32(0.0)
+    if denom != wp.float64(0.0) and not is_hydro:
         w0 = k0 / denom
         w1 = k1 / denom
     pC = w0 * x0 + w1 * x1
@@ -843,9 +905,18 @@ def _scatter_sap_contacts_to_env_direct_f64(
     env_contact_witness1[env, slot] = x1
     env_contact_point[env, slot] = pC
     env_contact_phi0[env, slot] = wp.dot(x1 - x0, cz) - rigid_contact_margin0[tid] - rigid_contact_margin1[tid]
-    env_contact_mu[env, slot] = _contact_mu_pair(shape_material_mu, sh0, sh1, fallback_mu)
-    env_contact_k[env, slot] = _sap_combine_stiffness(k0, k1)
-    env_contact_tau[env, slot] = _contact_tau_pair(shape_material_tau, sh0, sh1, fallback_tau)
+    material = _newton_contact_material_override(
+        tid,
+        _contact_mu_pair(shape_material_mu, sh0, sh1, fallback_mu),
+        _sap_combine_stiffness(k0, k1),
+        _contact_tau_pair(shape_material_tau, sh0, sh1, fallback_tau),
+        rigid_contact_stiffness,
+        rigid_contact_damping,
+        rigid_contact_friction,
+    )
+    env_contact_mu[env, slot] = material[0]
+    env_contact_k[env, slot] = material[1]
+    env_contact_tau[env, slot] = material[2]
 
     env_contact_R_WC[env, slot, 0, 0] = cx.x
     env_contact_R_WC[env, slot, 1, 0] = cx.y
@@ -933,6 +1004,9 @@ def _scatter_sap_contacts_to_env_direct_f64_f32_pose(
     fallback_k: float,
     shape_material_tau: wp.array(dtype=wp.float64),
     fallback_tau: float,
+    rigid_contact_stiffness: wp.array(dtype=wp.float32),
+    rigid_contact_damping: wp.array(dtype=wp.float32),
+    rigid_contact_friction: wp.array(dtype=wp.float32),
 ):
     tid = wp.tid()
     if tid >= active_count:
@@ -981,7 +1055,8 @@ def _scatter_sap_contacts_to_env_direct_f64_f32_pose(
     denom = k0 + k1
     w0 = wp.float64(0.5)
     w1 = wp.float64(0.5)
-    if denom != wp.float64(0.0):
+    is_hydro = rigid_contact_stiffness[tid] > wp.float32(0.0)
+    if denom != wp.float64(0.0) and not is_hydro:
         w0 = k0 / denom
         w1 = k1 / denom
     pC = w0 * x0 + w1 * x1
@@ -992,9 +1067,18 @@ def _scatter_sap_contacts_to_env_direct_f64_f32_pose(
     env_contact_witness1[env, slot] = x1
     env_contact_point[env, slot] = pC
     env_contact_phi0[env, slot] = wp.dot(x1 - x0, cz) - rigid_contact_margin0[tid] - rigid_contact_margin1[tid]
-    env_contact_mu[env, slot] = _contact_mu_pair(shape_material_mu, sh0, sh1, fallback_mu)
-    env_contact_k[env, slot] = _sap_combine_stiffness(k0, k1)
-    env_contact_tau[env, slot] = _contact_tau_pair(shape_material_tau, sh0, sh1, fallback_tau)
+    material = _newton_contact_material_override(
+        tid,
+        _contact_mu_pair(shape_material_mu, sh0, sh1, fallback_mu),
+        _sap_combine_stiffness(k0, k1),
+        _contact_tau_pair(shape_material_tau, sh0, sh1, fallback_tau),
+        rigid_contact_stiffness,
+        rigid_contact_damping,
+        rigid_contact_friction,
+    )
+    env_contact_mu[env, slot] = material[0]
+    env_contact_k[env, slot] = material[1]
+    env_contact_tau[env, slot] = material[2]
 
     env_contact_R_WC[env, slot, 0, 0] = cx.x
     env_contact_R_WC[env, slot, 1, 0] = cx.y
@@ -1457,14 +1541,6 @@ class SapContactJacobian:
             return 0
         return int(np.maximum(count_np, 0).sum())
 
-    @staticmethod
-    def _raise_if_hydro_contacts(contacts: SapContacts) -> None:
-        if contacts.hydro_contact_arrays is not None:
-            raise NotImplementedError(
-                "SapContactJacobian hydro contact integration is not implemented yet; "
-                "to be migrated from sim.hydro.contact_adapter."
-            )
-
     def _setup_mappings(self) -> None:
         body_src_row_start_np = np.full(self.body_count, -1, dtype=np.int32)
         body_dof_start_np = np.zeros(self.body_count, dtype=np.int32)
@@ -1594,6 +1670,9 @@ class SapContactJacobian:
         self._empty_rigid_contact_point = wp.zeros((self.max_contacts,), dtype=wp.vec3, device=self.device)
         self._empty_rigid_contact_normal = wp.zeros((self.max_contacts,), dtype=wp.vec3, device=self.device)
         self._empty_rigid_contact_margin = wp.zeros((self.max_contacts,), dtype=wp.float32, device=self.device)
+        self._empty_rigid_contact_material = wp.zeros(
+            (self.max_contacts,), dtype=wp.float32, device=self.device
+        )
 
         self.local_joint_qd_sap_input_wp = None
         self.local_free_motion_joint_qd_sap_wp = None
@@ -1663,8 +1742,6 @@ class SapContactJacobian:
             raise TypeError("SapContactJacobian.compute requires SapControl.")
         if not isinstance(contacts, SapContacts):
             raise TypeError("SapContactJacobian.compute requires SapContacts.")
-        self._raise_if_hydro_contacts(contacts)
-
         # Reuse the SAP-native free-motion kernels for body-origin kinematics,
         # motion subspaces, and articulation-local H.  The global dense A is
         # not assembled here; contact preparation builds env-local A blocks.
@@ -1673,9 +1750,10 @@ class SapContactJacobian:
             wp.copy(self.local_joint_qd_sap_input_wp, self.free_motion.joint_qd_sap_input)
             wp.copy(self.local_free_motion_joint_qd_sap_wp, self.free_motion.free_motion_joint_qd_sap)
 
-        active_count = self.max_contacts
+        total_contact_count = self._total_rigid_contact_count(contacts)
+        active_count = min(total_contact_count, self.max_contacts)
         contact_capacity = max(1, min(self.max_rigid_contact, int(self.contact_env_phi0_wp.shape[1])))
-        truncated = 0
+        truncated = max(total_contact_count - self.max_contacts, 0)
 
         wp.launch(
             _assemble_body_origin_jacobians_local_sap,
@@ -1757,6 +1835,21 @@ class SapContactJacobian:
             if contacts.rigid_contact_margin1 is not None
             else self._empty_rigid_contact_margin
         )
+        rigid_contact_stiffness = (
+            contacts.rigid_contact_stiffness
+            if contacts.rigid_contact_stiffness is not None
+            else self._empty_rigid_contact_material
+        )
+        rigid_contact_damping = (
+            contacts.rigid_contact_damping
+            if contacts.rigid_contact_damping is not None
+            else self._empty_rigid_contact_material
+        )
+        rigid_contact_friction = (
+            contacts.rigid_contact_friction
+            if contacts.rigid_contact_friction is not None
+            else self._empty_rigid_contact_material
+        )
         scatter_dim = int(self.max_contacts)
         has_f64_contacts = contacts.has_f64_rigid_contacts
         if contact_body_q_is_f32 and has_f64_contacts:
@@ -1798,6 +1891,9 @@ class SapContactJacobian:
                     float(self.fallback_stiffness),
                     self.contact_shape_tau,
                     float(self.fallback_tau_d),
+                    rigid_contact_stiffness,
+                    rigid_contact_damping,
+                    rigid_contact_friction,
                 ],
                 device=self.device,
             )
@@ -1847,6 +1943,9 @@ class SapContactJacobian:
                     float(self.fallback_stiffness),
                     self.contact_shape_tau,
                     float(self.fallback_tau_d),
+                    rigid_contact_stiffness,
+                    rigid_contact_damping,
+                    rigid_contact_friction,
                 ],
                 device=self.device,
             )
@@ -1890,6 +1989,9 @@ class SapContactJacobian:
                     float(self.fallback_stiffness),
                     self.contact_shape_tau,
                     float(self.fallback_tau_d),
+                    rigid_contact_stiffness,
+                    rigid_contact_damping,
+                    rigid_contact_friction,
                 ],
                 device=self.device,
             )
@@ -1934,6 +2036,9 @@ class SapContactJacobian:
                     float(self.fallback_stiffness),
                     self.contact_shape_tau,
                     float(self.fallback_tau_d),
+                    rigid_contact_stiffness,
+                    rigid_contact_damping,
+                    rigid_contact_friction,
                 ],
                 device=self.device,
             )

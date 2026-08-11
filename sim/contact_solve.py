@@ -6115,9 +6115,13 @@ class SapContactSolve:
                 inputs=[v_guess_active, 1],
                 device=self.device,
             )
-        self.last_iterations = -1
-        self.last_line_search_iterations = -1
-        return self._make_result(self.last_iterations, self.last_line_search_iterations, True)
+        iterations_env = np.asarray(self.newton_iterations_env.numpy(), dtype=np.int64).reshape(-1)
+        line_search_iterations_env = np.asarray(self.ls_iterations_total.numpy(), dtype=np.int64).reshape(-1)
+        converged_env = np.asarray(self.converged_env.numpy(), dtype=np.int64).reshape(-1)
+        self.last_iterations = int(iterations_env.max(initial=0))
+        self.last_line_search_iterations = int(line_search_iterations_env.max(initial=0))
+        converged = bool(np.all(converged_env != 0))
+        return self._make_result(self.last_iterations, self.last_line_search_iterations, converged)
 
     def _make_result(self, iterations: int, line_search_iterations: int, converged: bool) -> SapContactSolveResult:
         return SapContactSolveResult(

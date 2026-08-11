@@ -245,7 +245,9 @@ class SapContacts:
     rigid_contact_normald: wp.array | None = None
     rigid_contact_margin0d: wp.array | None = None
     rigid_contact_margin1d: wp.array | None = None
-    hydro_contact_arrays: Any | None = None
+    rigid_contact_stiffness: wp.array | None = None
+    rigid_contact_damping: wp.array | None = None
+    rigid_contact_friction: wp.array | None = None
 
     @property
     def has_rigid_contacts(self) -> bool:
@@ -341,8 +343,10 @@ def sap_model_from_newton(model: SapModel | Any) -> SapModel:
         joint_target_mode=model.joint_target_mode,
         joint_target_ke=model.joint_target_ke,
         joint_target_kd=model.joint_target_kd,
-        joint_target_pos=model.joint_target_pos,
-        joint_target_vel=model.joint_target_vel,
+        # Newton 1.5 renamed the public target arrays.  Keep SAP-Warp's
+        # internal names stable at this dirty adapter boundary.
+        joint_target_pos=model.joint_target_q,
+        joint_target_vel=model.joint_target_qd,
         joint_f=model.joint_f,
         joint_act=model.joint_act,
         joint_effort_limit=model.joint_effort_limit,
@@ -411,8 +415,8 @@ def sap_control_from_newton(control: SapControl | Any) -> SapControl:
         return control
     return SapControl(
         joint_f=control.joint_f,
-        joint_target_pos=getattr(control, "joint_target_pos", None),
-        joint_target_vel=getattr(control, "joint_target_vel", None),
+        joint_target_pos=getattr(control, "joint_target_q", None),
+        joint_target_vel=getattr(control, "joint_target_qd", None),
         joint_act=getattr(control, "joint_act", None),
         joint_f_order="public",
     )
@@ -438,7 +442,9 @@ def sap_contacts_from_newton(contacts: SapContacts | Any | None) -> SapContacts:
         rigid_contact_normald=getattr(contacts, "rigid_contact_normald", None),
         rigid_contact_margin0d=getattr(contacts, "rigid_contact_margin0d", None),
         rigid_contact_margin1d=getattr(contacts, "rigid_contact_margin1d", None),
-        hydro_contact_arrays=getattr(contacts, "hydro_contact_arrays", None),
+        rigid_contact_stiffness=getattr(contacts, "rigid_contact_stiffness", None),
+        rigid_contact_damping=getattr(contacts, "rigid_contact_damping", None),
+        rigid_contact_friction=getattr(contacts, "rigid_contact_friction", None),
     )
 
 
